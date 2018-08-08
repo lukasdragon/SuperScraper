@@ -796,7 +796,7 @@ namespace SteamBot
                     {
                         if (SteamGuardAccount.AcceptConfirmation(confirmation))
                         {
-                            Log.Success("Confirmed {0}. (Confirmation ID #{1})", confirmation.Description, confirmation.ID);
+                            Log.Success("Confirmed {0}. (Confirmation ID #{1})", confirmation.Key, confirmation.ID);
                         }
                     }
                 }
@@ -1115,8 +1115,12 @@ namespace SteamBot
 
                 SteamFriends.SetPersonaName(DisplayNamePrefix + DisplayName);
                 SteamFriends.SetPersonaState(EPersonaState.Online);
+                SetGamePlaying(440);
+
 
                 Log.Success("Steam Bot Logged In Completely!");
+                
+                
 
                 GetUserHandler(SteamClient.SteamID).OnLoginCompleted();
             });
