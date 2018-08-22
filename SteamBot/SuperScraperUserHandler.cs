@@ -9,9 +9,21 @@ namespace SteamBot
 {
     public class SuperScraperUserHandler : UserHandler
     {
-        public TF2Value AmountAdded;
+        public TF2Value UnverifiedAmount;
 
         public SuperScraperUserHandler(Bot bot, SteamID sid) : base(bot, sid) { }
+
+
+        public static int InviteTimerInterval = 2000;
+
+
+        public int userWepAdded = 0;
+
+        public int invalidItem = 0;
+        public bool errorMsgRun = false;
+
+
+
 
 
         #region overrides
@@ -27,10 +39,14 @@ namespace SteamBot
 
 
         public override void OnLoginCompleted()
-        {           
+        {
         }
 
-        public override void OnFriendRemove() { }
+        public override void OnFriendRemove()
+        {
+            Log.Success(Bot.SteamFriends.GetFriendPersonaName(OtherSID) + "removed me!");
+
+        }
 
 
         #endregion
@@ -73,7 +89,10 @@ namespace SteamBot
         #region tradeLogic
         public override bool OnTradeRequest()
         {
-            return true;
+            if (IsAdmin)
+                return true;
+
+            return false;
         }
 
         public override void OnTradeError(string error)
@@ -90,12 +109,62 @@ namespace SteamBot
 
         public override void OnTradeInit()
         {
-            SendTradeMessage("Hurray, great success! Please put up your items.");
+            UnverifiedAmount = TF2Value.Zero;
+            SendTradeMessage("Hurray, great success! I'm ready to trade!");
+            SendTradeMessage("Please note that I will give you a single scrap for each item you add ");
         }
 
-        public override void OnTradeAddItem(Schema.Item schemaItem, Inventory.Item inventoryItem) { }
+        public override void OnTradeAddItem(Schema.Item schemaItem, Inventory.Item inventoryItem)
+        {
+            var item = Trade.CurrentSchema.GetItem(schemaItem.Defindex);
+            Log.Success("User added: " + schemaItem.ItemName);
+            if (invalidItem >= 4)
+            {
+                Trade.CancelTrade();
+                Bot.SteamFriends.SendChatMessage(OtherSID, EChatEntryType.ChatMsg, "Stop messing around. This bot is used for scrapbanking, and will only accept craftable weapons.");
+            }
+            else if ((item.CraftClass == "weapon" || item.CraftMaterialType == "weapon") && !inventoryItem.IsNotCraftable)
+            {
+                userWepAdded++;
+                UnverifiedAmount += TF2Value.Scrap * 0.5;
+            }
+            else if (item.Defindex == 5000)
+                UnverifiedAmount += TF2Value.Scrap;
+            else if (item.Defindex == 5001)
+                UnverifiedAmount += TF2Value.Reclaimed;
+            else if (item.Defindex == 5002)
+                UnverifiedAmount += TF2Value.Refined;
+            else
+            {
+                Trade.SendMessage(schemaItem.ItemName + " is not a valid item! Please remove it from the trade.");
+                invalidItem++;
+            }
+            SendTradeMessage("I now owe you: {0} ref, {1} rec, and {2} scrap", UnverifiedAmount.RefinedPart, UnverifiedAmount.ReclaimedPart, UnverifiedAmount.ScrapPart);
+        }
 
-        public override void OnTradeRemoveItem(Schema.Item schemaItem, Inventory.Item inventoryItem) { }
+
+        public override void OnTradeRemoveItem(Schema.Item schemaItem, Inventory.Item inventoryItem)
+        {
+            var item = Trade.CurrentSchema.GetItem(schemaItem.Defindex);
+            Log.Success("User removed: " + schemaItem.ItemName);
+            if ((item.CraftClass == "weapon" || item.CraftMaterialType == "weapon") && !inventoryItem.IsNotCraftable)
+            {
+                userWepAdded--;
+                UnverifiedAmount -= TF2Value.Scrap * 0.5;
+            }
+            else if (item.Defindex == 5000)
+                UnverifiedAmount -= TF2Value.Scrap;
+            else if (item.Defindex == 5001)
+                UnverifiedAmount -= TF2Value.Reclaimed;
+            else if (item.Defindex == 5002)
+                UnverifiedAmount -= TF2Value.Refined;
+            else
+            {
+                invalidItem--;
+            }
+            SendTradeMessage("I now owe you: {0} ref, {1} rec, and {2} scrap", UnverifiedAmount.RefinedPart, UnverifiedAmount.ReclaimedPart, UnverifiedAmount.ScrapPart);
+        }
+
 
 
 
@@ -112,7 +181,7 @@ namespace SteamBot
                 {
                     Trade.SetReady(true);
                 }
-                SendTradeMessage("Scrap: {0}", AmountAdded.ScrapTotal);
+                SendTradeMessage("Scrap: {0}", UnverifiedAmount.ScrapTotal);
             }
         }
 
@@ -166,37 +235,59 @@ namespace SteamBot
 
         public bool Validate()
         {
-            AmountAdded = TF2Value.Zero;
-
+            TF2Value verifiedValue = TF2Value.Zero;            
             List<string> errors = new List<string>();
+
+            if (invalidItem > 0)
+            {
+                errors.Add("You have given me invalid items! Please remove them!");
+                Log.Warn("User has invalid items put up!");
+            }
 
             foreach (TradeUserAssets asset in Trade.OtherOfferedItems)
             {
-                var item = Trade.OtherInventory.GetItem(asset.assetid);
-                if (item.Defindex == 5000)
-                    AmountAdded += TF2Value.Scrap;
+                var item = Trade.CurrentSchema.GetItem(Trade.OtherInventory.GetItem(asset.assetid).Defindex);
+
+                if ((item.CraftClass == "weapon" || item.CraftMaterialType == "weapon"))
+                    verifiedValue += TF2Value.Scrap * 0.5;
+                else if (item.Defindex == 5000)
+                    verifiedValue += TF2Value.Scrap;
                 else if (item.Defindex == 5001)
-                    AmountAdded += TF2Value.Reclaimed;
+                    verifiedValue += TF2Value.Reclaimed;
                 else if (item.Defindex == 5002)
-                    AmountAdded += TF2Value.Refined;
-                else
-                {
-                    var schemaItem = Trade.CurrentSchema.GetItem(item.Defindex);
-                    errors.Add("Item " + schemaItem.Name + " is not a metal.");
-                }
+                    verifiedValue += TF2Value.Refined;
             }
 
-            if (AmountAdded == TF2Value.Zero)
+            if (UnverifiedAmount != verifiedValue)
             {
-                errors.Add("You must put up at least 1 scrap.");
+                errors.Add("The previous payout estimate was incorrect... I actually owe you " + verifiedValue.RefinedTotal + " ref");
             }
 
+            Trade.RemoveAllItems();
+
+            while (verifiedValue.RefinedPart > 0)
+            {
+                verifiedValue -= TF2Value.Refined;
+                Trade.AddItem(5002);                
+            }
+            while (verifiedValue.ReclaimedPart > 0)
+            {
+                verifiedValue -= TF2Value.Reclaimed;
+                Trade.AddItem(5001);
+            }
+            while (verifiedValue.ScrapPart > 0)
+            {
+                verifiedValue -= TF2Value.Scrap;
+                Trade.AddItem(5000);
+            }
+                        
             // send the errors
             if (errors.Count != 0)
-                SendTradeMessage("There were errors in your trade: ");
+                Trade.SendMessage("There were errors in your trade: ");
+
             foreach (string error in errors)
             {
-                SendTradeMessage(error);
+                Trade.SendMessage(error);
             }
 
             return errors.Count == 0;
